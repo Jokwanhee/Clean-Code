@@ -5,6 +5,8 @@ JUnit은 자바 프레임워크 중에서 가장 유명하다. 이 장에서는 
     - [ComparisonCompactorTest.java](#comparisoncompactortestjava)
     - [ComparisonCompactor.java](#comparisoncompactorjava)
     - [ComparisonCompactor.java (디팩터링 결과)](#comparisoncompactorjava-디팩터링-결과)
+    - [ComparisonCompactor 개선하기](#comparisoncompactor-개선하기)
+    - [ComparisonCompactor.java (최종 버전)](#comparisoncompactorjava-최종-버전)
 ___
 ## 1. JUnit 프레임워크
 JUnit의 시작은 켄트 벡과 에릭 감마, 두 사람이다. 이 두사람은 함께 아틀란타 행 비행기를 타고 가다 JUnit을 만들었다.
@@ -271,5 +273,404 @@ public class ComparisonCompactor {
 ``` 
 
 처음에서 클린 코드를 소개할 때, 보이스카우트 규칙을 말한 적이 있다. 처음에 왔을 때보다 마지막이 깔끔해야 한다는 규칙이다. 그렇다면 디팩터링한 ComparisonCompactor 말고 그 전에 잘 정리된 ComparisonCompactor 모듈을 개선해야하는 것인가? 
-- 그렇다면 코드를 어떻게 개선하면 좋을까?
+- 개선해야하면 코드를 어떻게 개선하면 좋을까?
 
+### ComparisonCompactor 개선하기
+가장 먼저 눈에 거슬리는 부분은 멤버 변수 앞에 붙인 접두어 f다.
+그러므로 접두어 f를 모두 제거하자.
+```java
+private int contextLength;
+private String expected;
+private String actual;
+private int prefix;
+private int suffix;
+```
+
+다음으로 compact 함수 시작부에 캡슐화되지 않은 조건문이 보인다.
+```java
+public String compact(String message) {
+    if (expected == null || actual == null || areStringsEquals()) {
+        return Assert.format(message, expected, actual);
+    }
+
+    findCommonPrefix();
+    findCommonSuffix();
+    String expected = compactString(this.expected);
+    String actual = compactString(this.actual);
+    return Assert.format(message, expected, actual);
+}
+```
+의도를 분명히 표현하려면 조건문을 캡슐화해야 한다. 즉, 조건문을 메서드로 뽑아내 적절한 이름을 붙인다.
+```java
+if (expected == null || actual == null || areStringsEquals())
+```
+```java
+if (shouldNotCompact()) { 
+    //... 
+}
+
+private boolean shouldNotCompact() {
+    return expected == null || actual == null || areStringsEqual();
+}
+```
+- 함수에서 멤버 변수와 이름이 똑같은 변수를 사용하는 이유가 무엇일까?
+```java
+private String expected;
+
+public String compact(String message) {
+    String expected = compactString(this.expected);
+}
+```
+
+서로 다른 의미이므로 이름은 명확하게 붙인다.
+```java
+private String expected;
+private String actual;
+
+public String compact(String message) {
+    String compactExpected = compactString(expected);
+    String compactActual = compactString(actual);
+}
+```
+부정문은 긍정문보다 이해하기 약간 더 어렵다. 그러므로 첫 문장 if를 긍정으로 만들어 조건문을 반전한다.
+```java
+public String compact(String message) {
+    if (canBeCompated()) {
+        //...
+    }
+}
+
+private boolean canBeCompacted() {
+    return expected != null && actual != null && !areStringsEqual();
+}
+```
+compact() 함수 이름이 이상하다. 실제로 해당 함수가 false이면 압축하지 않는다. 그러므로 formatCompactedComparsion 이라는 이름이 적합해보인다.
+```java
+public String formatCompactedComparison(String message) {}
+```
+
+if문 안에서 예상 문자열과 실제 문자열을 진짜로 압축한다. 이 부분을 빼내어 compactExpectedAndActual이라는 메서드로 만든다.
+```java
+private String compactExpected;
+private String compactActual;
+
+public String formatCompactedComparison(String message) {
+    if (canBeCompacted()) {
+        compactExpectedAndActual();
+        return Assert.format(message, compactExpected, compactActual);
+    } //...
+}
+
+private void compactExpectedAndActual() {
+    findCommonPrefix();
+    findCommonSuffix();
+    compactExpected = compactString(expected);
+    compactActual = compactString(actual);
+}
+```
+위에서 compactExpected와 compactActual을 멤버 변수로 승격했다. compactExpectedAndActual 함수는 마지막 두 줄은 변수를 반환하지만 첫째 줄과 둘째 줄은 반환값이 없다 즉, 함수 사용방식이 일관적이지 못하다.
+
+findCommonPrefix와 findCommonSuffix를 변경해 접두어 값과 접미어 값을 반환한다.
+```java
+private void compactExpectedAndActual() {
+    prefixIndex = findCommonPrefix();
+    suffixIndex = findCommonSuffix();
+    compactExpected = compactString(expected);
+    compactActual = compactString(actual);
+}
+
+private int findCommonPrefix() {
+    int prefixIndex = 0;
+    int end = Math.min(expected.length(), actual.length());
+    for (; prefixIndex < end; prefixIndex++) {
+        if (expected.charAt(prefixIndex) != actual.charAt(prefixIndex)) 
+            break;
+    }
+    return prefixIndex;
+}
+
+private int findCommonSuffix() {
+    int expectedSuffix = expected.length() - 1;
+    int actualSuffix = actual.length() - 1;
+    for (; actualSuffix >= prefixIndex && expectedSuffix >= prefixIndex; actualSuffix--, expectedSuffix--) {
+        if (expected.charAt(expectedSuffix) != actual.charAt(actualSuffix))
+            break;
+    }
+    return expected.length() - expectedSuffix;
+}
+```
+
+findCommonSuffix 함수를 주의 깊게 살펴보면 숨겨진 시간적인 결합(hidden temporal coupling)이 존재한다. 다시 말해, findCommonSuffix는 findCommonPrefix가 prefixIndex를 계산한다는 사실에 의존한다.
+
+만약에 findCommonPrefix와 findCommonSuffix를 잘못된 순서로 호출하면 오류가 발생할 수 있다. 그래서 시간 결합을 외부에 노출하고자 findCommonSuffix를 고쳐 prefixIndex를 인수로 넘겼다.
+```java
+private vodi compactExpectedAndActual() {
+    prefixIndex = findCommonPrefix();
+    suffixIndex = findCommonSuffix(prefixIndex);
+    //...
+}
+
+private int findCommonSuffix(int prefixIndex) {
+    int expectedSuffix = expected.length() - 1;
+    int actualSuffix = actual.length() - 1;
+    for (; actualSuffix >= prefixIndex && expectedSuffix >= prefixIndex; actualSuffix--, expectedSuffix--) {
+        if (expected.charAt(expectedSuffix) != actual.charAt(actualSuffix))
+            break;
+    }
+    return expected.length() - expectedSuffix;
+}
+```
+인수로 뺀 prefixIndex 좀 자의적이다. 필요한 이유를 설명하지 못하고 있다. 다른 방식을 고안해보자.
+```java
+private void compactExpectedAndActual() {
+    findCommonPrefixAndSuffix();
+    //...
+}
+
+private void findCommonPrefixAndSuffix() {
+    findCommonPrefix();
+    int expectedSuffix = expected.length() - 1;
+    int actualSuffix = actual.length() - 1;
+    for (; 
+        actualSuffix >= prefixIndex && expectedSuffix >= prefixIndex;
+        actualSuffix--, expectedSuffix--
+    ) {
+        if (expected.charAt(expectedSuffix) != actual.charAt(actualSuffix))
+            break;
+    }
+    suffixIndex = expected.length() - expectedSuffix;
+}
+
+private void findCommonPrefix() {
+    prefixIndex = 0;
+    int end = Math.min(expected.length(), actual.length());
+    for (; prefixIndex < end; prefixIndex++) {
+        if (expected.charAt(prefixIndex) != actual.charAt(prefixIndex))
+            break;
+    }
+}
+```
+
+findCommonPrefix와 findCommonSuffix를 원래대로 되돌리고, findCommonSuffix라는 이름을 findCommonPrefixAndSuffix로 바꾸고, findCommonPrefixAndSuffix에서 가장 먼저 findCommonPrefix를 호출한다.
+
+그러면 두 함수를 호출하는 순서가 앞서 고친 코드보다 훨씬 분명해진다. 이제 함수를 정리해보자.
+```java
+private void findCommonPrefixAndSuffix() {
+    findCommonPrefix();
+    int suffixLength = 1;
+    for (; !suffixOverlapsPrefix(suffixLength); suffixLength++) {
+        if (charFromEnd(expected, suffixLength) !=
+            charFromEnd(actual, suffixLength))
+            break;
+    }
+    suffixIndex = suffixLength;
+}
+
+private char charFromEnd(String s, int i) {
+    return s.charAt(s.length() - i);
+}
+
+private boolean suffixOverlapsPrefix(int suffixLength) {
+    return actual.length() - suffixLength < prefixLength ||
+        expected.length() - suffixLength < prefixLength;
+}
+```
+코드가 훨씬 나아졌다. 코드를 고치니 suffixIndex가 실제로는 접미어 길이라는 사실이 드러난다. 이름이 적절하지 못하다는 의미이다.
+
+prefixIndex도 마찬가지로, "index"와 "length"가 동의어다. 비록 그렇다 하더라도, "length"가 더 합당하다. 실제로 suffixIndex는 0에서 시작하지 않는다. 1에서 시작하므로 진정한 길이가 아니다.
+
+computeCommonSuffix에 +1이 곳곳에 등장하는 이유가 여기에 있다. 고쳐보자.
+```java
+public class ComparisonCompactor {
+    private int suffixLength;
+
+    private void findCommonPrefixAndSuffix() {
+        findCommonPrefix();
+        suffixLength = 0;
+        for (; !suffixOverlapsPrefix(suffixLength); suffixLength++) {
+            if (charFromEnd(expected, suffixLength) != 
+                charFromEnd(actual, suffixLegnth)) 
+                    break;
+        }
+    }
+
+    private char charFromEnd(String s, int i) {
+        return s.charAt(s.length() - i - 1);
+    }
+
+    private boolean suffixOverlapsPrefix(int suffixLength) {
+        return actual.length() - suffixLength <= prefixLength ||
+            expected.length() - suffixLength <= prefixLength;
+    }
+
+    private String compactString(String source) {
+        String result = 
+            DELTA_START +
+            source.substring(prefixLength, source.length() - 
+                suffixLength) + 
+            DELTA_END;
+        if (prefixLength > 0)
+            result = computeCommonPrefix() + result;
+        if (suffixLength > 0)
+            result = result + computeCommonSuffix();
+        return result;
+    }
+
+    private String computeCommonSuffix() {
+        int end = Math.min(expecetd.length() - suffixLength +
+            contextLength, expected.length()
+        );
+        return
+            expected.substring(expected.length() - suffixLength, end) +
+            (expected.length() - suffixLength <
+            expected.length() - contextLength ? 
+            ELLIPSIS : "");
+    }
+}
+```
+computeCommonSuffix에서 +1을 없애고, charFromEnd에 -1을 추가하고 suffixOverlapsPrefix에 <=를 사용했다. 논리적으로 타당하다.
+
+다음 suffixIndex를 suffixLength로 바꿨다. 이는 코드 가독성을 위해서이다.
+
+그런데 문제가 하나 발생했다. +1을 제거하던 중 compactString에서 다음 행을 발견했다.
+```java
+if (suffixLength > 0)
+```
+
+suffixLength가 1씩 감소하므로 >연산자가 아닌 >=연산자로 바꾸어야 한다. 하지만 >=연산자는 말도 안된다. 즉, 코드가 틀렸으며 필경 버그라는 말이다. 엄밀히 말하면 버그는 아니다. 
+
+코드를 조금 분석해보면 이제 if문은 길이가 0이 접미어를 걸러내 첨부하지는 않는다. 원래 코드는 suffixIndex가 언제나 1 이상이었으므로 if 문 자체가 있으나마나였다.
+
+compactString에 있는 if문 둘 다 의심스럽다. 둘 다 필요 없어보인다.
+불필요한 if문을 제거하고 compactString 구조를 다듬어 좀 더 깔끔하게 만들자.
+```java
+private String compactString(String source) {
+    return
+        computeCommonPrefix() +
+        DELTA_START +
+        source.substring(prefixLength, source.length() - suffixLength) +
+        DELTA_END +
+        computeCommonSuffix();
+}
+```
+좀 더 깔끔하게 정리할 여지는 존재한다. 사실 사소하게 이것저것 손볼 곳이 아직 많다. 그래서 최종 코드를 제시하려고 한다.
+
+## ComparisonCompactor.java (최종 버전)
+```java
+public class ComparisonCompactor {
+    private static final String ELLIPSIS = "...";
+    private static final String DELTA_END = "]";
+    private static final String DELTA_START = "[";
+
+    private int contextLength;
+    private String expected;
+    private String actual;
+    private int prefixLength;
+    private int suffixLength;
+
+    public ComparisonCompactor(
+        int contextLength, String expected, String actual
+    ) {
+        this.contextLength = contextLength;
+        this.expected = expected;
+        this.actual = actual;
+    }
+
+    public String formatCompactedComparison(String message) {
+        String compactExpected = expected;
+        String compactActual = actual;
+        if (shouldBeCompacted()) {
+            findCommonPrefixAndSuffix();
+            compactExpected = compact(expected);
+            compactActual = compact(actual);
+        }
+        return Assert.format(message, compactExpected, compactActual);
+    }
+
+    private boolean shouldBeCompacted() {
+        return !shouldNotBeCompacted();
+    }
+
+    private boolean shouldNotBeCompacted() {
+        return expected == null ||
+            acutal == null ||
+            expected.equals(actual);
+    }
+
+    private void findCommonPrefixAndSuffix() {
+        findCommonPrefix();
+        suffixLength = 0;
+        for (; !suffixOverlapsPrefix(); suffixLength++) {
+            if (charFromEnd(expected, suffixLength) !=
+                charFromEnd(actual, suffixLength))
+                break;
+        }
+    }
+
+    private char charFromEnd(String s, int i) {
+        return s.charAt(s.length() - i - 1);
+    }
+
+    private boolean suffixOverlapsPrefix() {
+        return actual.length() - suffixLength <= prefixLength ||
+            expected.length() - suffixLength <= prefixLength;
+    }
+
+    private void findCommonPrefix() {
+        prefixLength = 0;
+        int end = Math.min(expected.length(), actual.length());
+        for (; prefixLength < end; prefixLength++) {
+            if (expected.charAt(prefixLength) != actual.charAt(prefixLength))
+                break;
+        }
+    }
+
+    private String compact(String s) {
+        return new StringBuilder()
+            .append(startingEllipsis())
+            .append(startingContext())
+            .append(DELTA_START)
+            .append(delta(s))
+            .append(DELTA_END)
+            .append(endingContext())
+            .append(endingEllipsis())
+            .toString();
+    }
+
+    private String startingEllipsis() {
+        return prefixLength > contextLength ? ELLIPSIS : "";
+    }
+
+    private String startingContext() {
+        int contextStart = Math.max(0, prefixLength - contextLength);
+        int contextEnd = prefixLength;
+        return expected.substring(contextStart, contextEnd);
+    }
+
+    private String delta(String s) {
+        int deltaStart = prefixLength;
+        int deltaEnd = s.length() - suffixLength;
+        return s.substring(deltaStart, deltaEnd);
+    }
+
+    private String endingContext() {
+        int contextStart = expected.length() - suffixLength;
+        int contextEnd = 
+            Math.min(contextStart + contextLength, expected.length());
+        return expected.substring(contextStart, contextEnd);
+    }
+
+    private String endingEllipsis() {
+        return (suffixLength > contextLength ? ELLIPSIS : "");
+    }
+}
+```
+코드는 상당히 깔끔하다. 전체 함수는 위상적으로 정렬했으므로 각 함수가 사용된 직후에 정의된다. 분석 함수가 먼저 나오고 조합 함수가 그 뒤를 이어서 나온다.
+
+이 장 초반에서 내렸던 결정 일부를 번복했다는 사실을 눈치챌 수 있다.
+- 처음에 추출했던 메서드 몇 개를 formatCompactedComparison에다 도로 집어넣었다다.
+
+리팩터링 하다 보면 원래 했던 변경을 되돌리는 경우가 흔하다. 리팩터링은 코드가 어느 수준에 이를때까지 수많은 시행착오를 반복하는 작업이기 때문이다.
+
+## 결론
+우리는 보이스카우트 규칙을 지켰다. 코드를 처음보다 조금 깨끗하게 만드는 책임은 우리 모두에게 있다.
