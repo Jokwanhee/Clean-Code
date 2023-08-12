@@ -7,6 +7,13 @@
     - [Javadoc 주석, HTML 태그 사용?](#javadoc-주석-html-태그-사용)
     - [SerialDate 클래스에서 DayDate 클래스로 바뀐 이유](#serialdate-클래스에서-daydate-클래스로-바뀐-이유)
     - [직렬화 제어](#직렬화-제어)
+    - [첫 해 변수와 마지막 해 변수](#첫-해-변수와-마지막-해-변수)
+    - [DayDateFactory.java](#daydatefactoryjava)
+    - [SpreadsheetFactory.java](#spreadsheetdatefactoryjava)
+    - [요일 상수](#요일-상수)
+    - [기본 생성자](#기본-생성자)
+    - [for 문 내 if 문 두 개](#for-문-내-if-문-두-개)
+    - [Day enum 클래스](#day-enum-클래스)
 ___
 JCommon 라이브러리를 뒤져보면 org.jfree.date라는 패키지가 있으며, 여기에 SerialDate라는 클래스가 있다.
 
@@ -235,4 +242,195 @@ serialVersionUID 변수를 선언하지 않으면 컴파일러가 자동으로 �
 
 그래서 serialVersionUID 변수를 없애기로 결정했다.
 
+### 일렬번호를 나타내는 두 변수
+일렬 번호를 나타내는 두 변수는 DayDate 클래스가 표현할 수 있는 최초 날짜와 최후 날짜를 의미한다. 
+```java
+/** 1900년 1월 1일에서 시작하는 직렬 번호 */
+public static final int SERIAL_LOWER_BOUND = 2;
 
+/** 9999년 12월 31일에 끝나는 직렬 번호 */
+public static final int SERIAL_UPPER_BOUND = 2958465;
+```
+좀 더 깔끔하게 바꿔보자.
+```java
+public static final int EARLIEST_DATE_ORDINARY = 2; // 1/1/1900
+public static final int LATEST_DATE_ORDINARY = 2958465; // 12/31/9999
+```
+
+EARLIEST_DATE_ORDINARY이 0이 아니라 2인 이유는 분명치 않지만 마이크로소프트 엑셀에서 날짜를 표현하는 방식과 관련이 있는 듯 하다. 이 사안은 SpreadsheetDate 클래스에서 설명하고 있다.
+
+```java
+/**
+ * 엑셀은 1900년 1월 1일을 1로 취급하는 관례를 사용한다.
+ * 이 클래스는 1900년 1월 1일을 2로 취급하는 관례를 사용한다.
+ * 이 클래스를 사용할 경우 1900년도 1월과 2월을 계산하면
+ * 날짜 번호가 엑셀 계산과 달라진다. 하지만 엑셀은
+ * (1900년 2월 29일이 실제로 존재하지 않지만!) 하루를 추가하므로
+ * 이 날짜 이후부터 계산한 결과는 일치한다.
+```
+그런데 이 사안은 SpreadsheetDate의 구현과 관련되지 DayDate와 아무러 상관이 없다. 그래서 EARLIEST_DATE_ORDINARY과 LATEST_DATE_ORDINARY이 DayDate에 속하지 않으며 SpreadsheetDate 클래스로 옮겨져야 한다고 판단한다.
+### 첫 해 변수와 마지막 해 변수
+```java
+/** 이 클래스 형식이 지원하는 첫 해 */
+public static final int MINIMUM_YEAR_SUPPORTED = 1900;
+/** 이 클래스 형식이 지원하는 마지막 해 */
+public static final int MAXIMUM_YEAR_SUPPORTED = 9999;
+```
+두 변수 때문에 갈등이 생긴다. DayDate는 어디까지나 추상 클래스로, 구체적인 구현 정보를 포함할 필요가 없다. 그렇다면 최소 년도와 최대 년도를 지정할 이유도 없다. 그래서 두 변수를 SpreadsheetDate 클래스로 옮길 생각이다. 하지만 RelativeDayOfWeekRule이라는 클래스에서도 두 변수를 사용한다. 
+
+즉, 추상 클래스 사용자가 구현 정보를 알아야 한다는 딜레마가 생긴다.
+
+DayDate 자체를 훼손하지 않으면서 구현 정보를 전달할 방법이 필요하다. 일반적으로 파생 클래스의 인스턴스로부터 구현 정보를 전달할 방법이 필요하다.
+
+DayDate 인스턴스는 getPreviousDayOfWeek, getNearestDayOfWeek, getFollowingDayOfWeek 메서드 중 하나가 생선한다. 세 메서드는 모두 addDays가 생성하는 DayDate 인스턴스를 반환한다. 그리고 addDays 메서드는 createInstance 메서드를 호출해 DayDate 인스턴스를 생성한다. 그런데 createInstance 메서드는 SpreadsheeDate 인스턴스를 생성한다!
+
+일반적으로 부모 클래스는 파생 클래스를 몰라야 바람직하다. Abstract Factory 패턴을 적용해 DayDateFactory 를 만들어서, DayDate 인스턴스를 생성하여 (최대 날짜와 최소 날짜 등) 구현 관련 질문에 답할 수 있다
+### DayDateFactory.java
+```java
+public abstract class DayDateFactory {
+    private static DayDateFactory factory = new SpreadsheetDateFactory();
+    public static void setInstance(DayDateFactory factory) {
+        DayDateFactory.factory = factory;
+    }
+
+    protected abstract DayDate _makeDate(int ordinal);
+    protected abstract DayDate _makeDate(int day, DayDate.Month month, int year);
+    protected abstract DayDate _makeDate(int day, int month, int year);
+    protected abstract DayDate _makeDate(java.util.Date date);
+    protected abstract int _getMinimumYear();
+    protected abstract int _getMaximumYear();
+
+    public static DayDate makeDate(int ordinal) {
+        return factory._makeDate(ordinal);
+    }
+
+    public static DayDate makeDate(int day, DayDate.Month month, int year) {
+        return factory._makeDate(day, month, year);
+    }
+
+    public static DayDate makeDate(int day, int month, int year) {
+        return factory._makeDate(day, month, year);
+    }
+
+    public static DayDate makeDate(java.util.Date date) {
+        return factory._makeDate(date);
+    }
+
+    public static int getMinimumYear() {
+        return factory._getMinimumYear();
+    }
+
+    public static int getMaximumYear() {
+        return factory._getMaximumYear();
+    }
+}
+```
+위 클래스에서 createInstance 메서드를 makeDate라는 이름으로 바꾸었다. 이름이 좀 더 서술적이다.
+
+추상 메서드로 위임하는 정적 메서드는 Singleton, Decorator, Abstract Factory 패턴 조합을 사용한다.
+### SpreadsheetDateFactory.java
+```java
+public class SpreadsheetDateFactory extends DayDateFactory {
+    public DayDate _makeDate(int ordinal) {
+        return new SpreadsheetDate(ordinal);
+    }
+
+    public DayDate _makeDate(int day, DayDate.Month month, int year) {
+        return new SpreadsheetDate(day, month, year);
+    }
+
+    public DayDate _makeDate(int day, int month, int year) {
+        return new SpreadsheetDate(day, month, year);
+    }
+
+    public DayDate _makeDate(Date date) {
+        final GregorianCalendar calendar = new GregorianCalendar();
+        calendar.setTime(date);
+        return new SpreadsheetDate(
+            calendar.get(Calendar.DATE),
+            DayDate.Month.make(calendar.get(Calendar.MONTH) + 1),
+            calendar.get(Calendar.YEAR)
+        );
+    }
+
+    protected int _getMinimumYear() {
+        return SpreadsheetDate.MINIMUM_YEAR_SUPPORTED;
+    }
+
+    protected int _getMaximumYear() {
+        return SpreadsheetDate.MAXIMUM_YEAR_SUPPORTED;
+    }
+}
+```
+위에서 보면 MINIMUM_YEAR_SUPPORTED 변수와 MAXIMUM_YEAR_SUPPORTED 변수가 적절한 위치인 SpreadsheetDate 클래스로 옮긴 것을 확인할 수 있다.
+
+### 요일 상수
+DayDate에 나타나는 문제점은 요일 상수이다. 이들은 enum이어야 마땅하다. 
+```java
+public static final int MONDAY = Calendar.MONDAY;
+//...
+```
+### 기본 생성자
+기본 생성자도 제거했다. 그 이유는 기본 생성자는 컴파일러가 기본으로 생성한다.
+```java
+protected SerialDate() {}
+```
+### for 문 내 if 문 두 개
+for 루프 안에 if 문이 두 번 나온다. 별로 맘에 들지 않는다. 그래서 || 연산자를 사용해 if 문을 하나로 만든다. 
+```java
+for (int i = 0; i < weekDayNames.length; i++) {
+    if (s.equals(shortWeekdayNames[i]) || s.equals(weekDayNames[i])) {
+        result = i;
+        break;
+    }
+}
+```
+### Day enum 클래스
+```java
+public enum Day {
+    MONDAY(Calendar.MONDAY),
+    TUESDAY(Calendar.TUESDAY),
+    //...
+
+    public final int index;
+
+    pirvate static DateFormatSymbols dateSymbols = new DateFormatSymbols();
+
+    Day(int day) {
+        index = day;
+    }
+
+    public static Day make(int index) throws IllegalArgumentException {
+        for (Day d : Day.values()) {
+            if (d.index == index) {
+                return d;
+            }
+        }
+        throw new IllegalArgumentException(
+            String.format("Illegal day index: %d.", index)
+        );
+    }
+
+    public static Day parse(String s) throws IllegalArgumentException {
+        String[] shortWeekdayNames =    
+            dateSymbols.getShortWeekdays();
+        String[] weekDayNames =
+            dateSymbols.getWeekdays();
+
+        s = s.trim();
+        for (Day day : Day.values()) {
+            if (s.equalsIgnoreCase(shortWeekdayNames[day.index]) ||
+                s.equalsIgnoreCase(weekDayNames[day.index])) {
+                   return day;
+            }
+        }
+        throw new IllegalArgumentException(
+            String.format("%s is not a valid weekday string", s)
+        );
+    }
+
+    public String toString() {
+        return dateSymbols.getWeekdays()[index];
+    } 
+}
+```
