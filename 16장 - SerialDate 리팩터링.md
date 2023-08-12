@@ -1,6 +1,12 @@
 # SerialDate 리팩터링
 
 - [첫째, 돌려보자](#첫째-돌려보자)
+- [둘째, 고쳐보자](#둘째-고쳐보자)
+    - [주석 정보 없애기](#주석-정보-없애기)
+    - [와일드카드 사용하기](#와일드-카드-사용하기)
+    - [Javadoc 주석, HTML 태그 사용?](#javadoc-주석-html-태그-사용)
+    - [SerialDate 클래스에서 DayDate 클래스로 바뀐 이유](#serialdate-클래스에서-daydate-클래스로-바뀐-이유)
+    - [직렬화 제어](#직렬화-제어)
 ___
 JCommon 라이브러리를 뒤져보면 org.jfree.date라는 패키지가 있으며, 여기에 SerialDate라는 클래스가 있다.
 
@@ -118,3 +124,115 @@ ___
 마지막으로, weekInMonthToString과 relativeToString에서 오류 문자열을 반환하는 대신 IllegalArgumentException을 던져 테스트를 통과시켰다.
 
 위와 같이 변경한 SerialDate는 모든 테스트 케이스르 통과했다. 이제는 SerialDate 코드가 제대로 돈다고 믿는다. 이제부터 SerialDate 코드를 '올바로' 고쳐보자.
+## 둘째, 고쳐보자
+### 주석 정보 없애기
+라이선스 정보, 저작권, 작성자, 변경 이력이 나온다. 법적인 정보는 필요하므로 라이선스 정보와 저작권은 보존한다. 반면, 변경 이력은 1960년대에 나온 방식이므로 없애도 된다.
+### 와일드 카드 사용하기
+import문 중
+```java
+import java.text.DateFormatSymbols;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+```
+위의 라이브러리 import를 아래의 코드처럼 와일드카드를 사용한다.
+```java
+import java.text.*;
+import java.util.*;
+```
+### Javadoc 주석, HTML 태그 사용?
+Javadoc 주석은 HTML 태그를 사용한다. 한 소스 코드에 여러 언어를 사용하다니, 탐탁치 못하다. 이 주석은 네 가지 언어(자바, 영어, Javadoc, HTML)를 사용한다. 그러니 양식을 맞추기 어렵다. 
+```JAVA
+/**
+ * 날짜...
+ * <P>
+ * ...
+ * <P>
+ * java.util.Date ...
+ * 
+ * @author 데이비드 길버트
+```
+### SerialDate 클래스에서 DayDate 클래스로 바뀐 이유
+- 클래스 이름이 SerialDate인 이유가 무엇일까?
+- 'Serial'이라는 단어가 왜 들어갈까?
+- 클래스가 Serializable에서 파생하니까?
+
+'Serial'이라는 단어가 들어가는 이유는 `SERIAL_LOWER_BOUND`와 `SERIAL_UPPER_BOUND`라는 상수에 있다. 
+```java
+/** 1900년 1월 1일에서 시작하는 직렬 번호 */
+public static final int SERIAL_LOWER_BOUND = 2;
+
+/** 9999년 12월 31일에 끝나는 직렬 번호 */
+public static final int SERIAL_UPPER_BOUND = 2958465;
+```
+
+클래스 이름이 SerialDate인 이뉴는 '일련번호(Serial Number)'를 사용해 클래스를 구현했기 때문이다. 여기서는 1899년 12월 30일 기준으로 경과한 날짜 수를 사용한다.
+
+두 가지 거슬리는 문제가 있다.
+
+첫 번째, '일련번호'라는 용어는 정확하지 못하다. 일련번호보다 '상대 오프셋(Relative Offset)'이 더 정확하다. '일련번호'라는 용어는 날짜보다 제품 식별 번호로 더 적합하다. 그래서 `SerialDate`클래스 이름은 별로다. 좀 더 서술적인 용어로 '서수(Ordinal)'가 있다.
+
+두 번째, 이 문제가 더 중요하다. SerialDate라는 이름은 구현(implement)을 암시하는데 실상은 추상 클래스다. 구현을 암시할 필요가 전혀 없다. 구현은 숨기는 편이 좋다. 그래서 SerialDate라는 이름의 추상화 수준이 올바르지 못하다고 생각한다. 그냥 Date가 좋다. 하지만 Date는 자바 라이브러리에서 너무 많다. 그러므로 최적은 아니고, 날짜를 다루므로 Day라는 이름도 괜찮다. 하지만 Day도 Date와 마찬가지이다. 밥 아저씨는 DayDate라는 클래스 이름을 사용하기로 하였다.
+
+이제부터 DayDate 는 SerialDate 를 가르킨다.
+
+Comparable과 Serializable을 상속하는 이유는 알겠다. 
+- 하지만 MonthConstants를 상속하는 이유는 무엇일까?
+
+MonthConstants 클래스는 달을 정의하는 static final 상수 모음에 불과하다. 상수 클래스를 상속하면 MonthConstants.January와 같은 표현을 사용할 필요가 없다. MonthConstants는 enum으로 정의해야 마땅하다.
+
+```java
+public abstract class DayDate implements Comparable, Serializable {
+    public static enum Month {
+        JANUARY(1),
+        FEBRUARY(2),
+        MARCH(3),
+        APRIL(4),
+        MAY(5),
+        //...
+    }
+
+    Month(int index) {
+        this.index = index;
+    }
+
+    public static Month make(int monthIndex) {
+        for (Month m : Month.values()) {
+            if (m.index == monthIndex) {
+                return m;
+            }
+        }
+        throw new IllegalArgumentException("Invalid month index " + monthIndex);
+    }
+    public final int index;
+}
+```
+이제는 testIsValidMonthCode 함수도 없어도 된다.
+```java 
+public void testIsValidMonthCode() throws Exception {
+    for (int i = 1; i <= 12; i++) {
+        assertTrue(isValidMonthCode(i));
+    }
+    assertFalse(isValidMonthCode(0));
+    assertFalse(isValidMonthCode(13));
+}
+```
+추가로 넘어온 달이 속한 분기를 반환하는 monthCodeToQuarter 함수도 없어도 된다.
+```java
+public static int monthCodeToQuarter(final int code) {
+    switch (code) {
+        case JANUARY:
+        case FEBRUARY:
+        case MARCH: return 1;
+        //...
+    }
+}
+```
+### 직렬화 제어
+serialVersionUID를 살펴보자. serialVersionUID 변수는 직렬화를 제어한다. 이 변수 값을 변경하면 이전 소프트웨어 버전에서 직렬화한 DayDate를 더 이상 인식하지 못한다. 즉, 이전 버전에서 직렬화한 DayDate 클래스를 복원하려 시도하면 InvalidClassException이 발생하는 것이다.
+
+serialVersionUID 변수를 선언하지 않으면 컴파일러가 자동으로 생성한다. 즉, 모듈을 변경할 때마다 변수 값이 달라진다.
+
+그래서 serialVersionUID 변수를 없애기로 결정했다.
+
+
