@@ -14,6 +14,9 @@
     - [기본 생성자](#기본-생성자)
     - [for 문 내 if 문 두 개](#for-문-내-if-문-두-개)
     - [Day enum 클래스](#day-enum-클래스)
+    - [addDays, addMonths, addYears](#adddays-addmonths-addyears)
+- [마지막 정리](#마지막-정리)
+- [결론](#결론)
 ___
 JCommon 라이브러리를 뒤져보면 org.jfree.date라는 패키지가 있으며, 여기에 SerialDate라는 클래스가 있다.
 
@@ -434,3 +437,94 @@ public enum Day {
     } 
 }
 ```
+### addDays, addMonths, addYears
+기존 addDays 메서드는 DayDate 변수를 사용하므로 static이어서는 안 된다. 그래서 인스턴스 메서드로 변경하였다. 그 다음 이 메서드는 toSerial 메서드를 호출하는데, 이 메서드 이름도 toOrdinal로 변경하였다. 마지막으로 메서드를 단순화 한다.
+- SerialDate addDays 메서드
+```java
+public static SerialDate addDays(final int days, final SerialDate base) {
+    final int serialDayNumber = base.toSerial() + days;
+    return SerialDate.createInstance(serialDayNumber);
+}
+```
+- DayDate addDays 메서드
+```java
+public DayDate addDays(int days) {
+    return DayDateFactory.makeDate(toOrdinal() + days);
+}
+```
+
+그 다음 addMonths 메서드도 마찬가지이다. 인스턴스 메서드로 고치고, 알고리즘이 다소 복잡하므로 임시 변수설명을 사용해 좀 더 읽기 쉽게 고친다.
+- SerialDate addMonths 메서드
+```java
+public static SerialDate addMonths(final int months, final SerialDate base) {
+    final int yy = (12 * base.getYYYY() + base.getMonth() + months - 1) / 12;
+    final int mm = (12 * base.getYYYY() + base.getMonth() + months - 1) % 12 + 1;
+    final int dd = Math.min(
+        base.getDayOfMonth(), SerialDate.lastDayOfMonth(mm, yy)
+    );
+    return SerialDate.createInstance(dd, mm, yy);
+}
+```
+- DayDate addMonths 메서드
+```java
+public DayDate addMonths(int months) {
+    int thisMonthAsOrdinal = 12 * getYear() + getMonth().index - 1;
+    int resultMonthAsOrdinal = thisMonthAsOrdinal + months;
+    int resultYear = resultMonthAsOrdinal / 12;
+    Month resultMonth = Month.make(resultMonthAsOrdinal % 12 + 1);
+
+    int lastDayOfResultMonth = lastDayOfMonth(resultMonth, resultYear);
+    int resultDay = Math.min(getDayOfMonth(), lastDayOfResultMonth);
+    return DayDateFactory.makeDate(resultDay, resultMonth, resultYear);
+}
+```
+
+마지막으로 addYears 메서드도 마찬가지이다.
+- SerialDate addYears
+```java
+public static SerialDate addYears(final int years, final SerialDate base) {
+    final int baseY = base.getYYYY();
+    final int baseM = base.getMonth();
+    final int baseD = base.getDayOfMonth();
+    
+    final int targetY = baseY + years;
+    final int targetD = Math.min(
+        baseD, SerialDate.lastDayOfMonth(baseM, targetY)
+    );
+
+    return SerialDate.createInstance(targetD, baseM, targetY);
+}
+```
+- DayDate plusYear
+```java
+public DayDate plusYear(int years) {
+    int resultYear = getYear() + years;
+    int lastDayOfMonthInResultYear = lastDayOfMonth(getMonth(), resultYear);
+    int resultDay = Math.min(getDayOfMonth(), lastDayOfMonthInResultYear);
+    return DayDateFactory.makeDate(resultDay, getMonth(), resultYear);
+}
+```
+
+addDays, addMonths, addYears 함수를 바꾸었다. 하지만 정적 메서드에서 인스턴스 메서드로 바꾸면서 뭔가 꺼림칙하다. date.addDays(5)라는 표현이 date 객체를 변경하지 않고 새 DayDate 인스턴스를 반환한다는 사실이 분명히 드러날 지 의문이다. 아니면 date 객체에 5일을 더한다고 오해할 소지는 없을 지..
+
+그래서 이름을 변경하였다. addDays 는 plusDays 로 addMonths 는 plusMonths로 바꾸었다.
+```java
+DayDate date = oldDate.plusDay(5);
+DayDate date = oldDate.plusMonths(5);
+```
+
+## 마지막 정리
+- 첫째, 처음에 나오는 주석은 너무 오래되었다. 그래서 간단하게 고치고 개선한다.
+- 둘째, enum을 모두 독자적인 소스 파일로 옮겼다.
+- 셋째, 정적 변수와 정적 메서드를 DateUtil이라는 새 클래스로 옮겼다.
+- 넷째, 일부 추상 메서드를 DayDate 클래스로 끌어올렸다.
+- 다섯째, Month.make를 Month.fromInt로 변경했다. 다른 enum도 똑같이 변경했다. 또한 모든 enum에 toInt() 접근자를 생성하고 index 필드를 private로 정의했다.
+- 여섯째, plusYears와 plusMonths에 흥미로운 중복이 있었다. correctLastDayOfMonth라는 새 메서드를 생성해 중복을 없앴다. 그래서 세 메서드가 모두 좀 더 명확해졌다.
+- 일곱째, 팔방미인으로 사용하던 숫자 1을 없앴다.
+
+DayDate 코드 커버리지는 84.9%로 감소하였다. 테스트하는 코드가 줄어서가 아니라 클래스 크기가 작아지는 바람에 테스트하지 않는 코드의 비중이 커졌기 때문이다. 테스트 케이스는 DayDate 53개 실행 문 중 45개를 테스트한다. 테스트하지 않는 코드는 너무 사소해 테스트할 필요도 없다.
+
+## 결론
+이 책에서 초반에 설명한 보이스카우트 규칙을 따랐다. 체크아웃한 코드보다 좀 더 깨끗한 코드를 체크인하게 되었다.
+
+테스트 커버리지가 증가하였으며, 버그 몇 개를 고쳤고, 코드 크기가 줄었고, 코드가 명확해졌다.
